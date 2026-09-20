@@ -185,6 +185,17 @@ class WikiTokenVerifier(TokenVerifier):
 
 async def wiki_login(username: str, password: str) -> httpx.AsyncClient:
     client = httpx.AsyncClient(timeout=45, follow_redirects=False)
+
+    async def retain_internal_session(response: httpx.Response) -> None:
+        # Browser cookies remain Secure. Only this private client, talking to the
+        # Compose service "wiki", may reuse them over the internal HTTP hop.
+        # Apply after EVERY response: login and later API calls can rotate cookies.
+        if response.url.scheme == "http" and response.url.host == "wiki":
+            for cookie in client.cookies.jar:
+                if cookie.domain in {"wiki", "wiki.local"}:
+                    cookie.secure = False
+
+    client.event_hooks["response"].append(retain_internal_session)
     try:
         token_response = await client.get(
             WIKI_API,
@@ -192,11 +203,6 @@ async def wiki_login(username: str, password: str) -> httpx.AsyncClient:
         )
         token_response.raise_for_status()
         login_token = token_response.json()["query"]["tokens"]["logintoken"]
-        # MediaWiki correctly marks browser cookies Secure. This client is on the
-        # private Docker network, so allow its session cookie on the internal HTTP
-        # hop only; no cookie is ever exposed by the MCP service.
-        for cookie in client.cookies.jar:
-            cookie.secure = False
         login_response = await client.post(
             WIKI_API,
             data={

@@ -87,3 +87,21 @@ The script requires `httpx`.
 Only source code and generic configuration examples are included. Production
 secrets, account data, page contents, database files, uploads, logs, backups and
 generated `LocalSettings.php` are excluded. Configure each deployment locally.
+
+### Private-wiki session regression checks
+
+Run `python -m unittest discover -s tests -p 'test_wiki_session.py'` in an
+environment with the MCP dependencies installed. These tests cover login cookie
+rotation, later session refreshes, HTTPS cookies, and rejection of Secure cookies
+on unrelated HTTP hosts.
+
+`tests/private_wiki_acceptance.py` tests the public OAuth and MCP flow, creates and
+reads one uniquely named temporary page, verifies that read-only scope cannot
+write, then deletes the test page and revokes its test tokens. It requires
+`WIKI_PUBLIC_URL`, `WIKI_USERNAME` and the mounted wiki password secret. MediaWiki
+retains the normal revision/deletion audit history; the test page does not remain
+among active wiki pages.
+
+The connector adjusts session cookies only within its own HTTP client when
+calling the private Compose hostname `wiki`. Browser cookies stay Secure.
+For a different upstream host, use an HTTPS API URL.
