@@ -10,12 +10,12 @@ import httpx
 
 BASE = os.getenv("MCP_BASE", "http://127.0.0.1:8090")
 RESOURCE = os.getenv("WIKI_PUBLIC_URL", "https://wiki.example.org").rstrip("/") + "/mcp"
-USERNAME = os.getenv("WIKI_USERNAME", "WikiMCP")
+USERNAME = os.getenv("WIKI_AUTH_USERNAME", os.getenv("WIKI_USERNAME", "WikiMCP"))
 
 
 password = os.getenv("WIKI_PASSWORD")
 if not password:
-    with open("/run/secrets/wiki_password", encoding="utf-8") as secret_file:
+    with open(os.getenv("WIKI_AUTH_PASSWORD_FILE", "/run/secrets/wiki_password"), encoding="utf-8") as secret_file:
         password = secret_file.read().strip()
 
 with httpx.Client(follow_redirects=False) as client:

@@ -32,6 +32,7 @@ PUBLIC_URL = os.getenv("WIKI_PUBLIC_URL", "https://wiki.example.org").rstrip("/"
 ISSUER = os.getenv("OAUTH_ISSUER", PUBLIC_URL).rstrip("/")
 RESOURCE = ISSUER + "/mcp"
 WIKI_USERNAME = os.getenv("WIKI_USERNAME", "WikiMCP")
+WIKI_AUTH_USERNAME = os.getenv("WIKI_AUTH_USERNAME", WIKI_USERNAME)
 STATE_DB = Path("/state/oauth.sqlite3")
 ACCESS_SECONDS = 600
 REFRESH_DAYS = 30
@@ -223,7 +224,7 @@ async def wiki_login(username: str, password: str) -> httpx.AsyncClient:
 
 
 async def verify_wiki_credentials(username: str, password: str) -> bool:
-    if not hmac.compare_digest(username, WIKI_USERNAME):
+    if not hmac.compare_digest(username, WIKI_AUTH_USERNAME):
         return False
     try:
         client = await wiki_login(username, password)
@@ -511,7 +512,7 @@ def authorize(client_id: str, redirect_uri: str, response_type: str, code_challe
             (digest(request_id), client_id, redirect_uri, state, code_challenge, selected_scope, RESOURCE, iso_after(minutes=10)),
         )
     items = "".join(f"<li><strong>{html.escape(s)}</strong><span>{html.escape(SCOPES[s])}</span></li>" for s in selected_scope.split())
-    return HTMLResponse(f'''<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wiki-Zugriff erlauben</title><style>*{{box-sizing:border-box}}body{{margin:0;background:#f6f5f2;color:#202122;font:16px system-ui,sans-serif}}main{{max-width:560px;margin:6vh auto;padding:24px}}.brand{{font:800 20px Georgia,serif;margin-bottom:14px}}section{{background:#fff;border:1px solid #c8ccd1;border-radius:14px;padding:28px;box-shadow:0 18px 55px #20212215}}h1{{margin:0 0 8px}}p,li span{{color:#54595d;line-height:1.5}}label{{display:block;font-weight:650;margin-top:16px}}input{{width:100%;padding:13px;border:1px solid #a2a9b1;border-radius:4px;margin-top:6px;font-size:16px}}ul{{list-style:none;padding:0}}li{{padding:10px 0;border-top:1px solid #eaecf0;display:grid;gap:3px}}button{{width:100%;border:0;border-radius:4px;padding:14px;background:#36c;color:#fff;font-weight:750;font-size:16px;margin-top:20px}}.cancel{{background:#eaecf0;color:#202122;margin-top:8px}}</style></head><body><main><div class="brand">MEIN WIKI</div><section><h1>Connector „Wiki“ verbinden</h1><p><strong>{html.escape(client['client_name'])}</strong> möchte im Namen des festgelegten Wiki-Benutzers zugreifen. Das Passwort wird direkt durch MediaWiki geprüft und nicht im OAuth-Speicher abgelegt.</p><ul>{items}</ul><form method="post" action="/oauth/authorize"><input type="hidden" name="request_id" value="{request_id}"><label>Wiki-Benutzer<input name="username" autocomplete="username" value="{html.escape(WIKI_USERNAME)}" required></label><label>Passwort<input type="password" name="password" autocomplete="current-password" required></label><button name="decision" value="allow">Zugriff erlauben</button><button class="cancel" name="decision" value="deny">Abbrechen</button></form></section></main></body></html>''', headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+    return HTMLResponse(f'''<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wiki-Zugriff erlauben</title><style>*{{box-sizing:border-box}}body{{margin:0;background:#f6f5f2;color:#202122;font:16px system-ui,sans-serif}}main{{max-width:560px;margin:6vh auto;padding:24px}}.brand{{font:800 20px Georgia,serif;margin-bottom:14px}}section{{background:#fff;border:1px solid #c8ccd1;border-radius:14px;padding:28px;box-shadow:0 18px 55px #20212215}}h1{{margin:0 0 8px}}p,li span{{color:#54595d;line-height:1.5}}label{{display:block;font-weight:650;margin-top:16px}}input{{width:100%;padding:13px;border:1px solid #a2a9b1;border-radius:4px;margin-top:6px;font-size:16px}}ul{{list-style:none;padding:0}}li{{padding:10px 0;border-top:1px solid #eaecf0;display:grid;gap:3px}}button{{width:100%;border:0;border-radius:4px;padding:14px;background:#36c;color:#fff;font-weight:750;font-size:16px;margin-top:20px}}.cancel{{background:#eaecf0;color:#202122;margin-top:8px}}</style></head><body><main><div class="brand">MEIN WIKI</div><section><h1>Connector „Wiki“ verbinden</h1><p><strong>{html.escape(client['client_name'])}</strong> möchte auf das Wiki zugreifen. Du bestätigst mit deinem persönlichen Konto; Wiki-Aktionen werden als <strong>{html.escape(WIKI_USERNAME)}</strong> ausgeführt. Dein Passwort wird direkt durch MediaWiki geprüft und nicht im OAuth-Speicher abgelegt.</p><ul>{items}</ul><form method="post" action="/oauth/authorize"><input type="hidden" name="request_id" value="{request_id}"><label>Wiki-Benutzer<input name="username" autocomplete="username" value="{html.escape(WIKI_AUTH_USERNAME)}" required></label><label>Passwort<input type="password" name="password" autocomplete="current-password" required></label><button name="decision" value="allow">Zugriff erlauben</button><button class="cancel" name="decision" value="deny">Abbrechen</button></form></section></main></body></html>''', headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
 
 
 @web.post("/oauth/authorize")

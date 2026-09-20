@@ -16,9 +16,9 @@ with PKCE S256, dynamic client registration, scoped access tokens, refresh-token
 rotation and token revocation. OAuth state is stored in a separate SQLite volume;
 access and refresh tokens are stored as keyed hashes.
 
-The configured `WIKI_USERNAME` is the single integration account. The authorization
-screen checks that account's password through MediaWiki. All MCP operations run as
-that account, subject to its wiki permissions and the granted OAuth scopes:
+The configured `WIKI_USERNAME` is the integration account. The authorization
+screen checks `WIKI_AUTH_USERNAME` (defaults to `WIKI_USERNAME`) through MediaWiki.
+All MCP operations run as `WIKI_USERNAME`, subject to its wiki permissions and the granted OAuth scopes:
 `wiki:read`, `wiki:write` and `wiki:admin`.
 
 The wiki disables anonymous reading, editing and self-registration. Administrators
@@ -105,3 +105,26 @@ among active wiki pages.
 The connector adjusts session cookies only within its own HTTP client when
 calling the private Compose hostname `wiki`. Browser cookies stay Secure.
 For a different upstream host, use an HTTPS API URL.
+
+
+### Separate human login and connector attribution
+
+For an existing wiki, create a dedicated account such as `MCP`, set
+`WIKI_USERNAME=MCP`, and set `WIKI_AUTH_USERNAME` to your personal account.
+Store the dedicated account password in a private file and configure
+`MCP_PASSWORD_FILE` to point to it. This secret is mounted only into the MCP
+service as `/run/secrets/wiki_password`; the wiki's installation secret is separate.
+Keep the existing wiki configuration volume.
+
+OAuth approval still uses the personal account and password. Wiki revisions
+created through MCP are attributed to the dedicated account. Manual browser edits
+retain the browser's logged-in account. Existing OAuth grants remain valid.
+Grant the service account only the MediaWiki rights needed for its tools; deleting
+pages requires `delete`, and moves without redirects require `suppressredirect`.
+The sample configuration defines an `mcp` group for these two rights; assign it
+to the service account if those tools are needed. No user-administration rights
+are required.
+
+When running `tests/private_wiki_acceptance.py` with separate accounts, set
+`WIKI_AUTH_PASSWORD_FILE` to a temporary private file containing the human account's
+password. The test verifies the page revision author and removes its own test page.

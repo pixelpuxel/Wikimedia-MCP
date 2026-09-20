@@ -13,8 +13,9 @@ import httpx
 
 BASE = os.environ["WIKI_PUBLIC_URL"].rstrip("/")
 RESOURCE = BASE + "/mcp"
-USERNAME = os.environ.get("WIKI_USERNAME", "WikiMCP")
-PASSWORD = Path("/run/secrets/wiki_password").read_text().strip()
+ACTOR = os.environ.get("WIKI_USERNAME", "WikiMCP")
+USERNAME = os.environ.get("WIKI_AUTH_USERNAME", ACTOR)
+PASSWORD = Path(os.environ.get("WIKI_AUTH_PASSWORD_FILE", "/run/secrets/wiki_password")).read_text().strip()
 TITLE = "MCP-Session-Test-" + secrets.token_hex(8)
 CONTENT = "Temporary MCP session regression check."
 issued = []
@@ -93,6 +94,11 @@ with httpx.Client(base_url=BASE, timeout=60, follow_redirects=False) as client:
         created = True
         result = call(token, "get_page", {"title": TITLE})
         assert not result.get("isError") and CONTENT in str(result), "Reading failed"
+        page = result.get("structuredContent")
+        if page is None:
+            page = json.loads(result["content"][0]["text"])
+        assert page["user"] == ACTOR, "Page revision attributed to wrong account"
+        print("PASS: revision author is the configured connector account")
         read_token = authorize("wiki:read")
         denied = call(read_token, "append_to_page", {"title": TITLE, "content": "MUST NOT BE WRITTEN"})
         assert denied.get("isError"), "Write scope was not enforced"

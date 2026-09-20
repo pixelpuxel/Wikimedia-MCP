@@ -32,9 +32,11 @@ services:
       WIKI_INTERNAL_API_URL: http://wiki/api.php
       WIKI_PUBLIC_URL: ${WIKI_PUBLIC_URL:-https://wiki.example.org}
       WIKI_USERNAME: ${WIKI_USERNAME:-WikiMCP}
+      WIKI_AUTH_USERNAME: ${WIKI_AUTH_USERNAME:-${WIKI_USERNAME:-WikiMCP}}
       OAUTH_ISSUER: ${WIKI_PUBLIC_URL:-https://wiki.example.org}
     secrets:
-      - wiki_password
+      - source: mcp_wiki_password
+        target: wiki_password
       - oauth_signing_secret
     ports:
       - "127.0.0.1:${MCP_PORT:-8192}:8090"
@@ -54,6 +56,8 @@ services:
 secrets:
   wiki_password:
     file: ./secrets/wiki_password
+  mcp_wiki_password:
+    file: ${MCP_PASSWORD_FILE:-./secrets/wiki_password}
   oauth_signing_secret:
     file: ./secrets/oauth_signing_secret
 

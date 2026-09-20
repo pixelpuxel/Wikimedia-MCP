@@ -42,3 +42,7 @@ $wgWhitelistReadRegexp = array();
 # Uploaded files are served through MediaWiki permission checks.
 $wgUploadPath = "$wgScriptPath/img_auth.php";
 $wgUploadDirectory = "$IP/images";
+
+# Connector account can use page-management tools without user administration.
+$wgGroupPermissions['mcp']['delete'] = true;
+$wgGroupPermissions['mcp']['suppressredirect'] = true;
