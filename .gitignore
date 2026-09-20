@@ -1,0 +1,33 @@
+# Credentials and environment overrides
+secrets/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+# Private wiki configuration, content and runtime state
+LocalSettings.php
+backups/
+backup/
+data/
+state/
+uploads/
+images/
+runtime-logs/
+*.sqlite*
+*.db
+*.db-*
+*.sql
+*.sql.*
+*.log
+*.tar
+*.tar.*
+*.tgz
+*.zip
+# Local development
+__pycache__/
+*.py[cod]
+.venv/
+.DS_Store

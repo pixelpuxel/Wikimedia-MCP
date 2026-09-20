@@ -1,0 +1,67 @@
+services:
+  wiki:
+    build:
+      context: ./wiki
+    restart: unless-stopped
+    environment:
+      WIKI_PUBLIC_URL: ${WIKI_PUBLIC_URL:-https://wiki.example.org}
+      WIKI_NAME: ${WIKI_NAME:-Private Wiki}
+      WIKI_ADMIN_USER: ${WIKI_USERNAME:-WikiMCP}
+      WIKI_CONTACT_EMAIL: ${WIKI_CONTACT_EMAIL:-webmaster@example.org}
+    secrets:
+      - wiki_password
+    ports:
+      - "127.0.0.1:${WIKI_PORT:-8191}:80"
+    volumes:
+      - wiki_data:/var/www/data
+      - wiki_config:/var/www/config
+      - wiki_images:/var/www/html/images
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/api.php?action=query&meta=siteinfo&format=json"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    networks:
+      - backend
+
+  mcp:
+    build:
+      context: ./mcp-server
+    restart: unless-stopped
+    environment:
+      WIKI_INTERNAL_API_URL: http://wiki/api.php
+      WIKI_PUBLIC_URL: ${WIKI_PUBLIC_URL:-https://wiki.example.org}
+      WIKI_USERNAME: ${WIKI_USERNAME:-WikiMCP}
+      OAUTH_ISSUER: ${WIKI_PUBLIC_URL:-https://wiki.example.org}
+    secrets:
+      - wiki_password
+      - oauth_signing_secret
+    ports:
+      - "127.0.0.1:${MCP_PORT:-8192}:8090"
+    volumes:
+      - mcp_state:/state
+    depends_on:
+      wiki:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    networks:
+      - backend
+
+secrets:
+  wiki_password:
+    file: ./secrets/wiki_password
+  oauth_signing_secret:
+    file: ./secrets/oauth_signing_secret
+
+volumes:
+  wiki_data:
+  wiki_config:
+  wiki_images:
+  mcp_state:
+
+networks:
+  backend: {}
