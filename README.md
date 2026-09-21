@@ -7,6 +7,8 @@ affiliated with the Wikimedia Foundation.
 The connector talks exclusively to MediaWiki's Action API. It supports searching
 and reading pages, revision history, recent changes, contributions and backlinks,
 plus creating, updating, appending, prepending, undoing, moving and deleting pages.
+File tools list and inspect uploads, upload protected images and PDFs, embed them
+in pages, report usage, and delete unused files.
 The interface and tool descriptions are in German.
 
 ## Authentication and private access
@@ -24,6 +26,14 @@ All MCP operations run as `WIKI_USERNAME`, subject to its wiki permissions and t
 The wiki disables anonymous reading, editing and self-registration. Administrators
 can create accounts. Uploaded files use MediaWiki's `img_auth.php`; Apache denies
 direct access to the uploads directory.
+
+Uploads accept PNG, JPEG, GIF, WebP and PDF up to 20 MB. Binary content is passed
+to `upload_file` as plain base64 or a base64 data URL. `embed_file_on_page` embeds
+images as MediaWiki thumbnails and inserts PDFs as protected `Media:` links. It
+requires the page's current revision ID, preventing accidental overwrites. Use
+`get_file` before deletion: `delete_file` refuses to remove files still referenced
+by pages. File uploads and resulting page revisions are attributed to the configured
+connector account.
 
 ## Included stack
 

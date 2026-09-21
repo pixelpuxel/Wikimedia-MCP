@@ -14,11 +14,15 @@ $wgMFDefaultSkinClass = 'SkinMinerva';
 
 # Settings compatible with the bundled legacy MediaWiki 1.27.
 $wgEnableUploads = true;
+$wgMaxUploadSize = 20 * 1024 * 1024;
+$wgFileExtensions = array( 'png', 'gif', 'jpg', 'jpeg', 'webp', 'pdf' );
+$wgStrictFileExtensions = true;
+$wgVerifyMimeType = true;
 $wgAllowImageTag = false;
 $wgEmailAuthentication = false;
 $wgEmergencyContact = getenv( 'WIKI_CONTACT_EMAIL' ) ?: 'webmaster@example.org';
 $wgPasswordSender = getenv( 'WIKI_CONTACT_EMAIL' ) ?: 'webmaster@example.org';
-$wgJobRunRate = 0;
+$wgJobRunRate = 1;
 $wgShowExceptionDetails = false;
 $wgShowDBErrorBacktrace = false;
 $wgDebugToolbar = false;

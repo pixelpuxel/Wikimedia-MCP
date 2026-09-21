@@ -19,6 +19,7 @@ RUN set -eux; \
 COPY apache-mediawiki.conf /etc/apache2/conf-available/mediawiki.conf
 COPY entrypoint.sh /usr/local/bin/wikimedia-mcp-entrypoint
 COPY LocalSettings.extra.php /opt/LocalSettings.extra.php
+COPY uploads.ini /usr/local/etc/php/conf.d/uploads.ini
 RUN set -eux; chmod 0755 /usr/local/bin/wikimedia-mcp-entrypoint; a2enconf mediawiki
 
 ENTRYPOINT ["wikimedia-mcp-entrypoint"]

@@ -1,4 +1,5 @@
 import base64
+import binascii
 import datetime as dt
 import hashlib
 import hmac
@@ -11,8 +12,8 @@ import sqlite3
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
-from urllib.parse import urlencode, urlparse
+from typing import Annotated, Literal
+from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -44,6 +45,8 @@ SCOPES = {
 DEFAULT_SCOPE = "wiki:read wiki:write wiki:admin"
 DB_LOCK = threading.Lock()
 FAILED_LOGINS: dict[str, tuple[int, dt.datetime]] = {}
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+ALLOWED_UPLOAD_EXTENSIONS = {"gif", "jpeg", "jpg", "pdf", "png", "webp"}
 
 
 def now() -> dt.datetime:
@@ -275,6 +278,105 @@ async def wiki_call(params: dict, *, write: bool = False, admin: bool = False) -
         await client.aclose()
 
 
+def normalize_filename(filename: str) -> str:
+    """Returns a safe MediaWiki filename without a namespace prefix."""
+    value = filename.strip()
+    for prefix in ("File:", "Datei:"):
+        if value.lower().startswith(prefix.lower()):
+            value = value[len(prefix):].strip()
+            break
+    if not value or value in {".", ".."} or "/" in value or "\\" in value:
+        raise RuntimeError("Invalid filename")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise RuntimeError("Invalid filename")
+    if any(character in value for character in "[]{}|#<>:"):
+        raise RuntimeError("Filename contains characters that are unsafe in wiki markup")
+    extension = value.rsplit(".", 1)[-1].lower() if "." in value else ""
+    if extension not in ALLOWED_UPLOAD_EXTENSIONS:
+        allowed = ", ".join(sorted(ALLOWED_UPLOAD_EXTENSIONS))
+        raise RuntimeError(f"Unsupported file type. Allowed extensions: {allowed}")
+    return value
+
+
+def decode_upload(content_base64: str) -> bytes:
+    """Decodes a plain base64 payload while enforcing the raw upload limit."""
+    value = content_base64.strip()
+    if value.startswith("data:"):
+        if ";base64," not in value:
+            raise RuntimeError("Data URL must contain a base64 payload")
+        value = value.split(";base64,", 1)[1]
+    value = re.sub(r"\s+", "", value)
+    if len(value) > ((MAX_UPLOAD_BYTES + 2) // 3) * 4 + 8:
+        raise RuntimeError("File exceeds the 20 MB upload limit")
+    try:
+        content = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise RuntimeError("File content is not valid base64") from exc
+    if not content:
+        raise RuntimeError("File is empty")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise RuntimeError("File exceeds the 20 MB upload limit")
+    return content
+
+
+def public_file_page_url(filename: str) -> str:
+    return f"{PUBLIC_URL}/Wiki/File:{quote(filename.replace(' ', '_'), safe='')}"
+
+
+def safe_markup_text(value: str, field: str) -> str:
+    text = value.strip()
+    if "|" in text or "]]" in text or "\n" in text or "\r" in text:
+        raise RuntimeError(f"{field} must be plain single-line text")
+    return text
+
+
+async def wiki_upload(filename: str, content: bytes, comment: str, overwrite: bool) -> dict:
+    """Uploads bytes through MediaWiki's Action API as the connector account."""
+    current_access("wiki:write")
+    client = await wiki_login(WIKI_USERNAME, read_secret("wiki_password"))
+    try:
+        token_response = await client.get(
+            WIKI_API,
+            params={"action": "query", "meta": "tokens", "format": "json"},
+        )
+        token_response.raise_for_status()
+        payload = {
+            "action": "upload",
+            "filename": filename,
+            "comment": comment,
+            "token": token_response.json()["query"]["tokens"]["csrftoken"],
+            "format": "json",
+            # Filename collisions are checked immediately before this request.
+            # MediaWiki otherwise pauses on harmless duplicate-archive warnings.
+            "ignorewarnings": "1",
+        }
+        response = await client.post(
+            WIKI_API,
+            data=payload,
+            files={"file": (filename, content, "application/octet-stream")},
+        )
+        response.raise_for_status()
+        data = response.json()
+        if "error" in data:
+            raise api_error(data)
+        result = data.get("upload", {})
+        if result.get("result") != "Success":
+            warnings = result.get("warnings", {})
+            raise RuntimeError(f"MediaWiki upload warning: {json.dumps(warnings, ensure_ascii=False)}")
+        return result
+    finally:
+        await client.aclose()
+
+
+async def markup_namespaces() -> tuple[str, str]:
+    """Returns the localized Media and File namespace names used in wikitext."""
+    data = await wiki_call({"action": "query", "meta": "siteinfo", "siprop": "namespaces"})
+    namespaces = data.get("query", {}).get("namespaces", {})
+    media = namespaces.get("-2", namespaces.get(-2, {})).get("*", "Media")
+    file_namespace = namespaces.get("6", namespaces.get(6, {})).get("*", "File")
+    return media or "Media", file_namespace or "File"
+
+
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
 DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False)
@@ -284,6 +386,7 @@ mcp = FastMCP(
     instructions=(
         f"Dieser Connector liest und bearbeitet das MediaWiki unter {PUBLIC_URL}. "
         "Verwende zum Verlinken ausschließlich die zurückgegebenen öffentlichen /Wiki/-URLs. "
+        "Für Dateien zuerst get_file oder list_files verwenden; nach einem Upload kann embed_file_on_page sie sicher einbinden. "
         "Prüfe vor Änderungen die aktuelle Seite und fasse geplante schreibende Aktionen klar zusammen."
     ),
     website_url=PUBLIC_URL,
@@ -375,6 +478,149 @@ async def list_backlinks(title: Title, limit: Limit = 50) -> dict:
     """Listet Seiten, die auf die angegebene Seite verlinken."""
     data = await wiki_call({"action": "query", "list": "backlinks", "bltitle": title, "bllimit": limit, "blnamespace": 0})
     return {"title": title, "items": data.get("query", {}).get("backlinks", []), "continue": data.get("continue")}
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def list_files(prefix: Annotated[str, Field(max_length=255)] = "", limit: Limit = 50) -> dict:
+    """Listet hochgeladene Dateien mit Typ, Größe, Autor, Zeit und geschütztem Abruflink."""
+    data = await wiki_call({"action": "query", "list": "allimages", "aiprefix": prefix, "ailimit": limit, "aiprop": "url|size|mime|timestamp|user|comment|sha1"})
+    items = []
+    for item in data.get("query", {}).get("allimages", []):
+        items.append({
+            "name": item.get("name"),
+            "size": item.get("size"),
+            "mime": item.get("mime"),
+            "width": item.get("width"),
+            "height": item.get("height"),
+            "timestamp": item.get("timestamp"),
+            "user": item.get("user"),
+            "comment": item.get("comment", ""),
+            "sha1": item.get("sha1"),
+            "url": item.get("url"),
+            "description_url": public_file_page_url(item.get("name", "")),
+        })
+    return {"count": len(items), "items": items, "continue": data.get("continue")}
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_file(filename: Annotated[str, Field(min_length=1, max_length=255)]) -> dict:
+    """Liest Metadaten und Seitennutzung einer hochgeladenen Datei; der Abruflink erfordert eine Wiki-Anmeldung."""
+    name = normalize_filename(filename)
+    _, file_namespace = await markup_namespaces()
+    title = f"{file_namespace}:{name}"
+    data = await wiki_call({"action": "query", "prop": "imageinfo", "list": "imageusage", "titles": title, "iutitle": title, "iiprop": "url|size|mime|timestamp|user|comment|sha1", "iulimit": 100, "iufilterredir": "all"})
+    page = next(iter(data["query"]["pages"].values()))
+    if "missing" in page or not page.get("imageinfo"):
+        return {"exists": False, "name": name, "description_url": public_file_page_url(name)}
+    info = page["imageinfo"][0]
+    return {
+        "exists": True,
+        "name": name,
+        "title": page.get("title", f"File:{name}"),
+        "page_id": page.get("pageid"),
+        "size": info.get("size"),
+        "mime": info.get("mime"),
+        "width": info.get("width"),
+        "height": info.get("height"),
+        "timestamp": info.get("timestamp"),
+        "user": info.get("user"),
+        "comment": info.get("comment", ""),
+        "sha1": info.get("sha1"),
+        "url": info.get("url"),
+        "description_url": public_file_page_url(name),
+        "used_on": [{"page_id": usage.get("pageid"), "title": usage.get("title")} for usage in data.get("query", {}).get("imageusage", [])],
+        "usage_continue": data.get("continue"),
+    }
+
+
+@mcp.tool(annotations=WRITE)
+async def upload_file(
+    filename: Annotated[str, Field(min_length=1, max_length=255)],
+    content_base64: Annotated[str, Field(min_length=1, max_length=27962300)],
+    comment: Annotated[str, Field(max_length=255)] = "Datei über MCP hochgeladen",
+    overwrite: bool = False,
+) -> dict:
+    """Lädt PNG, JPEG, GIF, WebP oder PDF bis 20 MB aus base64 hoch. Vorhandene Dateien werden nur mit overwrite=true ersetzt."""
+    name = normalize_filename(filename)
+    existing = await get_file(name)
+    if existing.get("exists") and not overwrite:
+        raise RuntimeError("File already exists; set overwrite=true only after reviewing it")
+    result = await wiki_upload(name, decode_upload(content_base64), comment, overwrite)
+    info = result.get("imageinfo", {})
+    return {
+        "status": "uploaded",
+        "name": result.get("filename", name),
+        "size": info.get("size"),
+        "mime": info.get("mime"),
+        "url": info.get("url"),
+        "description_url": public_file_page_url(result.get("filename", name)),
+        "overwritten": existing.get("exists", False),
+    }
+
+
+@mcp.tool(annotations=WRITE)
+async def embed_file_on_page(
+    page_title: Title,
+    filename: Annotated[str, Field(min_length=1, max_length=255)],
+    expected_revision_id: Annotated[int, Field(gt=0)],
+    caption: Annotated[str, Field(max_length=500)] = "",
+    alt_text: Annotated[str, Field(max_length=500)] = "",
+    width: Annotated[int, Field(ge=50, le=1600)] = 320,
+    alignment: Literal["left", "right", "center", "none"] = "right",
+    placement: Literal["append", "prepend"] = "append",
+    summary: Annotated[str, Field(max_length=255)] = "Datei über MCP eingebunden",
+) -> dict:
+    """Bindet eine vorhandene Bilddatei in eine Seite ein; PDFs werden als geschützter Dateilink eingefügt. Erwartet die aktuelle Revisions-ID."""
+    name = normalize_filename(filename)
+    file_info = await get_file(name)
+    if not file_info.get("exists"):
+        raise RuntimeError("File does not exist; upload it first")
+    page = await get_page(page_title)
+    if not page.get("exists"):
+        raise RuntimeError("Page does not exist; create it first")
+    if page.get("revision_id") != expected_revision_id:
+        raise RuntimeError(f"Edit conflict: expected revision {expected_revision_id}, current revision is {page.get('revision_id')}")
+    media_namespace, file_namespace = await markup_namespaces()
+    namespace_pattern = "|".join(re.escape(value) for value in {"File", "Datei", "Media", media_namespace, file_namespace})
+    if re.search(r"\[\[(?:" + namespace_pattern + r"):\s*" + re.escape(name) + r"(?:\||\]\])", page.get("content", ""), re.IGNORECASE):
+        raise RuntimeError("File is already embedded or linked on this page")
+    if name.rsplit(".", 1)[-1].lower() == "pdf":
+        label = safe_markup_text(caption, "caption") or name
+        markup = f"[[{media_namespace}:{name}|{label}]]"
+    else:
+        options = ["thumb"]
+        if alignment != "none":
+            options.append(alignment)
+        options.append(f"{width}px")
+        alt = safe_markup_text(alt_text, "alt_text")
+        label = safe_markup_text(caption, "caption")
+        if alt:
+            options.append(f"alt={alt}")
+        if label:
+            options.append(label)
+        markup = f"[[{file_namespace}:{name}|{'|'.join(options)}]]"
+    separator = "\n\n" if page.get("content") else ""
+    content = page.get("content", "") + separator + markup if placement == "append" else markup + separator + page.get("content", "")
+    result = await update_page(page_title, content, expected_revision_id, summary)
+    # This legacy deployment runs background jobs manually. Purging forces the
+    # parser/link tables to reflect the new file reference before returning.
+    await wiki_call({"action": "purge", "titles": page_title})
+    result.update({"file": name, "markup": markup, "placement": placement})
+    return result
+
+
+@mcp.tool(annotations=DESTRUCTIVE)
+async def delete_file(filename: Annotated[str, Field(min_length=1, max_length=255)], reason: Annotated[str, Field(min_length=1, max_length=255)]) -> dict:
+    """Löscht eine Datei und ihre Beschreibungsseite. Vorher get_file nutzen und Seitennutzungen prüfen; die Löschung bleibt administrativ wiederherstellbar."""
+    name = normalize_filename(filename)
+    file_info = await get_file(name)
+    if not file_info.get("exists"):
+        raise RuntimeError("File does not exist")
+    if file_info.get("used_on"):
+        titles = ", ".join(item["title"] for item in file_info["used_on"][:10])
+        raise RuntimeError(f"File is still used on: {titles}. Remove those references first")
+    data = await wiki_call({"action": "delete", "title": file_info.get("title", f"File:{name}"), "reason": reason}, write=True, admin=True)
+    return {"status": "deleted", "name": name, "title": data["delete"].get("title", file_info.get("title", f"File:{name}")), "reason": data["delete"].get("reason", reason)}
 
 
 @mcp.tool(annotations=WRITE)
